@@ -85,6 +85,7 @@ export const verifyApiKey = async (apiKey: string, signal?: AbortSignal): Promis
   // 【核心修改】：直接返回成功，不发出任何网络请求
   return Promise.resolve();
 }
+
 export const uploadFile = async (
   apiKey: string,
   file: File,
@@ -130,31 +131,38 @@ export async function* streamMessage(
     headers: {
       ...anthropicHeaders(apiKey, hasFile(body)),
       'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
+      Accept: 'application/json', // 【核心修改】：只接收普通 JSON
     },
-    body: JSON.stringify({ ...body, stream: true }),
+    // 【核心修改】：强制关闭 stream
+    body: JSON.stringify({ ...body, stream: false }),
     signal,
   })
   
-  const contentType = response.headers.get('Content-Type') ?? ''
-  if (!response.body || !contentType.includes('text/event-stream')) {
-    throw await readErrorResponse(response, 'protocol', '')
+  // 直接读取完整的 JSON 文本，不再走流解析
+  const text = await response.text()
+  let payload: any
+  try {
+    payload = JSON.parse(text)
+  } catch (e) {
+    throw new ApiError('protocol', "后端返回了非 JSON 格式：" + text)
   }
-  
-  for await (const { event: eventName, data } of readServerSentEvents(response.body, signal)) {
-    let payload: unknown
-    try {
-      payload = JSON.parse(data)
-    } catch {
-      if (eventName !== 'error') continue
-    }
-    if (isErrorBody(payload)) throw new ApiError('stream', payload.error.message)
-    if (eventName === 'error') throw new ApiError('stream', data)
-    
-    const event = readMessageEvent(payload)
-    if (!event) continue
-    yield event
-    if (event.type === 'message_stop') return
+
+  if (isErrorBody(payload)) {
+    throw new ApiError('http', payload.error.message)
   }
-  throw new ApiError('interrupted', '')
+
+  // 提取文字（兼容 Anthropic 格式或 OpenAI 格式）
+  let finalText = ''
+  if (payload.content && payload.content[0]?.text) {
+    finalText = payload.content[0].text
+  } else if (payload.choices && payload.choices[0]?.message?.content) {
+    finalText = payload.choices[0].message.content
+  } else {
+    finalText = text
+  }
+
+  // 伪装成流事件给 UI，让它直接显示完整文本
+  yield { type: 'content_block_delta', delta: { type: 'text_delta', text: finalText } } as any
+  yield { type: 'message_stop' } as any
+  return
 }
