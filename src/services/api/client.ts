@@ -162,7 +162,10 @@ export async function* streamMessage(
   }
 
   // 伪装成流事件给 UI，让它直接显示完整文本
-  yield { type: 'content_block_delta', delta: { type: 'text_delta', text: finalText } } as any
+  // 伪装成标准的流事件给 UI
+  yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } as any
+  yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: finalText } } as any
+  yield { type: 'content_block_stop', index: 0 } as any
+  yield { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } } as any
   yield { type: 'message_stop' } as any
   return
-}
