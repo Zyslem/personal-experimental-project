@@ -75,14 +75,11 @@ export const request = async (url: string, init: RequestInit): Promise<Response>
 }
 
 const anthropicHeaders = (_apiKey: string, beta: boolean): Record<string, string> => ({
-  // 因为前端不再需要鉴权，这里传空字符串。后端会接管注入
   'x-api-key': '', 
   ...(beta ? { 'anthropic-beta': FILES_BETA } : {}),
 })
 
-/** 用 GET /models 校验 API Key（不产生费用） */
 export const verifyApiKey = async (apiKey: string, signal?: AbortSignal): Promise<void> => {
-  // 【核心修改】：直接返回成功，不发出任何网络请求
   return Promise.resolve();
 }
 
@@ -95,7 +92,6 @@ export const uploadFile = async (
   const form = new FormData()
   if (purpose) form.append('purpose', purpose)
   form.append('file', file)
-  // 加上 ?path=/files 让后端代理识别
   const response = await request(`${ANTHROPIC_BASE_URL}?path=/files`, {
     method: 'POST',
     headers: anthropicHeaders(apiKey, true),
@@ -106,7 +102,6 @@ export const uploadFile = async (
 }
 
 export const deleteFile = async (apiKey: string, fileId: string): Promise<void> => {
-  // 加上 ?path=/files/xxx 让后端代理识别
   await request(`${ANTHROPIC_BASE_URL}?path=/files/${encodeURIComponent(fileId)}`, {
     method: 'DELETE',
     headers: anthropicHeaders(apiKey, true),
@@ -125,48 +120,40 @@ export async function* streamMessage(
   body: CreateMessageRequest,
   signal: AbortSignal
 ): AsyncGenerator<MessageStreamEvent> {
-  // 加上 ?path=/messages 让后端代理识别
+  // 请求 Edge Function 代理
   const response = await request(`${ANTHROPIC_BASE_URL}?path=/messages`, {
     method: 'POST',
     headers: {
       ...anthropicHeaders(apiKey, hasFile(body)),
       'Content-Type': 'application/json',
-      Accept: 'application/json', // 【核心修改】：只接收普通 JSON
+      Accept: 'text/event-stream', // 重新开启接收流
     },
-    // 【核心修改】：强制关闭 stream
-    body: JSON.stringify({ ...body, stream: false }),
+    // 强制要求后端返回流式数据
+    body: JSON.stringify({ ...body, stream: true }),
     signal,
   })
   
-  // 直接读取完整的 JSON 文本，不再走流解析
-  const text = await response.text()
-  let payload: any
-  try {
-    payload = JSON.parse(text)
-  } catch (e) {
-    throw new ApiError('protocol', "后端返回了非 JSON 格式：" + text)
+  // 检查响应头，确保是流
+  const contentType = response.headers.get('Content-Type') ?? ''
+  if (!response.body || !contentType.includes('text/event-stream')) {
+    throw await readErrorResponse(response, 'protocol', '')
   }
-
-  if (isErrorBody(payload)) {
-    throw new ApiError('http', payload.error.message)
+  
+  // 使用原来的流解析循环
+  for await (const { event: eventName, data } of readServerSentEvents(response.body, signal)) {
+    let payload: unknown
+    try {
+      payload = JSON.parse(data)
+    } catch {
+      if (eventName !== 'error') continue
+    }
+    if (isErrorBody(payload)) throw new ApiError('stream', payload.error.message)
+    if (eventName === 'error') throw new ApiError('stream', data)
+    
+    const event = readMessageEvent(payload)
+    if (!event) continue
+    yield event
+    if (event.type === 'message_stop') return
   }
-
-  // 提取文字（兼容 Anthropic 格式或 OpenAI 格式）
-  let finalText = ''
-  if (payload.content && payload.content[0]?.text) {
-    finalText = payload.content[0].text
-  } else if (payload.choices && payload.choices[0]?.message?.content) {
-    finalText = payload.choices[0].message.content
-  } else {
-    finalText = text
-  }
-
-  // 伪装成流事件给 UI，让它直接显示完整文本
-  // 伪装成标准的流事件给 UI
-  yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } as any
-  yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: finalText } } as any
-  yield { type: 'content_block_stop', index: 0 } as any
-  yield { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } } as any
-  yield { type: 'message_stop' } as any
-  return;
+  throw new ApiError('interrupted', '')
 }
