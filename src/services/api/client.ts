@@ -168,4 +168,5 @@ export async function* streamMessage(
   yield { type: 'content_block_stop', index: 0 } as any
   yield { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } } as any
   yield { type: 'message_stop' } as any
-  return
+  return;
+}
