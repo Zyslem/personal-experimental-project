@@ -74,7 +74,7 @@ export const request = async (url: string, init: RequestInit): Promise<Response>
   return response
 }
 
-const anthropicHeaders = (apiKey: string, beta: boolean): Record<string, string> => ({
+const anthropicHeaders = (_apiKey: string, beta: boolean): Record<string, string> => ({
   // 因为前端不再需要鉴权，这里传空字符串。后端会接管注入
   'x-api-key': '', 
   ...(beta ? { 'anthropic-beta': FILES_BETA } : {}),
@@ -82,14 +82,9 @@ const anthropicHeaders = (apiKey: string, beta: boolean): Record<string, string>
 
 /** 用 GET /models 校验 API Key（不产生费用） */
 export const verifyApiKey = async (apiKey: string, signal?: AbortSignal): Promise<void> => {
-  // 加上 ?path=/models 让后端代理识别
-  await request(`${API_ORIGIN}?path=/models`, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    signal,
-  })
+  // 【核心修改】：直接返回成功，不发出任何网络请求
+  return Promise.resolve();
 }
-
 export const uploadFile = async (
   apiKey: string,
   file: File,

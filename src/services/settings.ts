@@ -88,7 +88,8 @@ const initialThemePreference = (): ThemePreference => {
 const initialTtsVoice = (): TtsVoice => (read(KEYS.ttsVoice) === 'tide' ? 'tide' : 'stella')
 
 export const useSettings = create<Settings>(() => ({
-  apiKey: read(KEYS.apiKey),
+  // 【核心修改】：强行给一个假 Key，前端一加载就会认为已配置
+  apiKey: 'dummy_key_from_ui', 
   locale: initialLocale(),
   location: initialLocation(),
   themePreference: initialThemePreference(),
@@ -120,8 +121,9 @@ export const setTtsVoice = (ttsVoice: TtsVoice) => {
 }
 
 export const setApiKey = (apiKey: string | null) => {
-  write(KEYS.apiKey, apiKey)
-  useSettings.setState({ apiKey })
+  // 【核心修改】：无论用户填什么（甚至不填），全部强制存为假 Key，防止覆盖
+  write(KEYS.apiKey, 'dummy_key_from_ui')
+  useSettings.setState({ apiKey: 'dummy_key_from_ui' })
 }
 
 export const setThinking = (thinking: boolean) => {
